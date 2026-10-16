@@ -27,6 +27,19 @@ cargo build --release
 Set `NETWATCH_PROBE_URL` to point the probe elsewhere for testing, e.g.
 `http://127.0.0.1:9/` (offline) or `http://example.com/` (captive).
 
+## Start at login
+
+```sh
+cargo install --path .
+netwatch install     # writes ~/Library/LaunchAgents/local.netwatch.plist and starts it
+netwatch uninstall   # stops it and removes the plist
+```
+
+launchd restarts netwatch if it crashes, but leaves it stopped after **Quit**
+until the next login. Errors are logged to `~/Library/Logs/netwatch.log`.
+After rebuilding, run `cargo install --path .` again and then `netwatch install`
+to restart it on the new binary.
+
 ## Notes
 
 - On MacBooks with a notch, status items that don't fit next to the active app's

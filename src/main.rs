@@ -4,7 +4,9 @@
 //! bar icon throbs; when a captive portal is detected it also launches the
 //! macOS Captive Network Assistant so you can log in.
 
-use std::process::Command;
+mod launch_agent;
+
+use std::process::{Command, ExitCode};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -233,7 +235,26 @@ impl App {
     }
 }
 
-fn main() {
+fn main() -> ExitCode {
+    let result = match std::env::args().nth(1).as_deref() {
+        None => run(),
+        Some("install") => launch_agent::install(),
+        Some("uninstall") => launch_agent::uninstall(),
+        Some(_) => {
+            eprintln!("usage: netwatch [install | uninstall]");
+            return ExitCode::from(2);
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("netwatch: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> std::io::Result<()> {
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     event_loop.set_activation_policy(ActivationPolicy::Accessory);
 
