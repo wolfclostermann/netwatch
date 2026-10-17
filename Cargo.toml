@@ -7,3 +7,6 @@ edition = "2024"
 tao = "0.37.1"
 tray-icon = "0.26.1"
 ureq = { version = "3.4.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Registry"] }
