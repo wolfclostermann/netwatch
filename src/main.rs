@@ -1,10 +1,22 @@
-//! netwatch — a macOS menu bar indicator for internet connectivity.
+//! netwatch — a menu bar / system tray indicator for internet connectivity.
 //!
-//! Polls Apple's captive-portal probe. When the connection is down the menu
-//! bar icon throbs; when a captive portal is detected it also launches the
-//! macOS Captive Network Assistant so you can log in.
+//! Polls Apple's captive-portal probe. When the connection is down the icon
+//! throbs; when a captive portal is detected it also opens a login window
+//! (the Captive Network Assistant on macOS, the browser on Windows).
 
+// No console window in release builds; `win::attach_console` restores CLI output.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+#[cfg(target_os = "macos")]
 mod launch_agent;
+#[cfg(target_os = "macos")]
+use launch_agent as autostart;
+#[cfg(windows)]
+mod run_key;
+#[cfg(windows)]
+use run_key as autostart;
+#[cfg(windows)]
+mod win;
 
 use std::process::{Command, ExitCode};
 use std::sync::mpsc;
@@ -13,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
+#[cfg(target_os = "macos")]
 use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -22,6 +35,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_ONLINE: Duration = Duration::from_secs(10);
 const POLL_OFFLINE: Duration = Duration::from_secs(3);
 const PORTAL_FALLBACK_URL: &str = "http://captive.apple.com";
+#[cfg(target_os = "macos")]
 const CAPTIVE_ASSISTANT: &str = "/System/Library/CoreServices/Captive Network Assistant.app";
 
 const ICON_SIZE: u32 = 36;
@@ -105,6 +119,7 @@ fn spawn_checker(proxy: EventLoopProxy<UserEvent>) -> mpsc::Sender<()> {
 /// Opens the Captive Network Assistant. It quits straight away if macOS hasn't
 /// flagged the network as captive itself, so fall back to the browser, where the
 /// portal will intercept the probe page.
+#[cfg(target_os = "macos")]
 fn open_login_window() {
     thread::spawn(|| {
         let _ = Command::new("open").arg(CAPTIVE_ASSISTANT).status();
@@ -117,6 +132,13 @@ fn open_login_window() {
             let _ = Command::new("open").arg(PORTAL_FALLBACK_URL).status();
         }
     });
+}
+
+/// Opens the probe page in the default browser, where the portal will
+/// intercept it.
+#[cfg(windows)]
+fn open_login_window() {
+    let _ = Command::new("explorer").arg(PORTAL_FALLBACK_URL).spawn();
 }
 
 /// Renders a globe glyph in the given colour. `alpha` scales overall opacity.
@@ -165,7 +187,34 @@ fn throb_frames(rgb: [u8; 3]) -> Vec<Icon> {
         .collect()
 }
 
+/// Rendered black and shown as a template so macOS tints it for light/dark mode.
+#[cfg(target_os = "macos")]
+fn online_rgb() -> [u8; 3] {
+    [0, 0, 0]
+}
+
+/// Windows doesn't tint tray icons, so match the taskbar theme ourselves.
+#[cfg(windows)]
+fn online_rgb() -> [u8; 3] {
+    if win::light_taskbar() {
+        [0, 0, 0]
+    } else {
+        [255, 255, 255]
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_online_icon(tray: &TrayIcon, icon: Icon) -> tray_icon::Result<()> {
+    tray.set_icon_templated(Some(icon))
+}
+
+#[cfg(windows)]
+fn set_online_icon(tray: &TrayIcon, icon: Icon) -> tray_icon::Result<()> {
+    tray.set_icon(Some(icon))
+}
+
 struct Icons {
+    online_rgb: [u8; 3],
     online: Icon,
     captive: Vec<Icon>,
     offline: Vec<Icon>,
@@ -173,9 +222,10 @@ struct Icons {
 
 impl Icons {
     fn new() -> Self {
+        let online_rgb = online_rgb();
         Self {
-            // Rendered black and shown as a template so macOS tints it for light/dark mode.
-            online: render_icon([0, 0, 0], 1.0),
+            online_rgb,
+            online: render_icon(online_rgb, 1.0),
             captive: throb_frames([255, 159, 10]),
             offline: throb_frames([255, 59, 48]),
         }
@@ -221,10 +271,19 @@ impl App {
     fn redraw(&self) {
         let _ = match self.icons.frames(self.status) {
             Some(frames) => self.tray.set_icon(Some(frames[self.frame].clone())),
-            None => self
-                .tray
-                .set_icon_templated(Some(self.icons.online.clone())),
+            None => set_online_icon(&self.tray, self.icons.online.clone()),
         };
+    }
+
+    /// Re-renders the online icon if its colour should change, e.g. after the
+    /// Windows taskbar switches between light and dark.
+    fn refresh_theme(&mut self) {
+        let rgb = online_rgb();
+        if rgb != self.icons.online_rgb {
+            self.icons.online_rgb = rgb;
+            self.icons.online = render_icon(rgb, 1.0);
+            self.redraw();
+        }
     }
 
     fn tick(&mut self) {
@@ -236,10 +295,15 @@ impl App {
 }
 
 fn main() -> ExitCode {
-    let result = match std::env::args().nth(1).as_deref() {
+    let command = std::env::args().nth(1);
+    #[cfg(windows)]
+    if command.is_some() {
+        win::attach_console();
+    }
+    let result = match command.as_deref() {
         None => run(),
-        Some("install") => launch_agent::install(),
-        Some("uninstall") => launch_agent::uninstall(),
+        Some("install") => autostart::install(),
+        Some("uninstall") => autostart::uninstall(),
         Some(_) => {
             eprintln!("usage: netwatch [install | uninstall]");
             return ExitCode::from(2);
@@ -255,7 +319,9 @@ fn main() -> ExitCode {
 }
 
 fn run() -> std::io::Result<()> {
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    #[cfg(target_os = "macos")]
     event_loop.set_activation_policy(ActivationPolicy::Accessory);
 
     let proxy = event_loop.create_proxy();
@@ -289,18 +355,19 @@ fn run() -> std::io::Result<()> {
                 let icons = Icons::new();
                 let tray = TrayIconBuilder::new()
                     .with_menu(Box::new(menu.clone()))
-                    .with_icon_templated(icons.online.clone())
                     .with_autosave_name("netwatch")
                     .with_tooltip(format!("netwatch: {}", Status::Unknown.label()))
                     .build()
                     .expect("create tray icon");
-                app = Some(App {
+                let new_app = App {
                     tray,
                     icons,
                     status_item: status_item.clone(),
                     status: Status::Unknown,
                     frame: 0,
-                });
+                };
+                new_app.redraw();
+                app = Some(new_app);
             }
             Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {
                 if let Some(app) = app.as_mut() {
@@ -311,6 +378,7 @@ fn run() -> std::io::Result<()> {
             Event::UserEvent(UserEvent::Status(status)) => {
                 if let Some(app) = app.as_mut() {
                     let was_throbbing = app.status.throbs();
+                    app.refresh_theme();
                     app.set_status(status);
                     if status.throbs() && !was_throbbing {
                         next_frame = Instant::now() + FRAME_INTERVAL;

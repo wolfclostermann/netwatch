@@ -1009,6 +1009,7 @@ dependencies = [
  "tao",
  "tray-icon",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
