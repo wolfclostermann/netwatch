@@ -34,7 +34,11 @@ const PROBE_URL: &str = "http://captive.apple.com/hotspot-detect.html";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_ONLINE: Duration = Duration::from_secs(10);
 const POLL_OFFLINE: Duration = Duration::from_secs(3);
+#[cfg(target_os = "macos")]
 const PORTAL_FALLBACK_URL: &str = "http://captive.apple.com";
+/// The page Windows itself opens when it detects a captive portal.
+#[cfg(windows)]
+const PORTAL_FALLBACK_URL: &str = "http://www.msftconnecttest.com/redirect";
 #[cfg(target_os = "macos")]
 const CAPTIVE_ASSISTANT: &str = "/System/Library/CoreServices/Captive Network Assistant.app";
 
@@ -134,8 +138,8 @@ fn open_login_window() {
     });
 }
 
-/// Opens the probe page in the default browser, where the portal will
-/// intercept it.
+/// Opens Microsoft's captive-portal redirect page in the default browser,
+/// where the portal will intercept it.
 #[cfg(windows)]
 fn open_login_window() {
     let _ = Command::new("explorer").arg(PORTAL_FALLBACK_URL).spawn();
