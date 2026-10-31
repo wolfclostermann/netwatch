@@ -17,7 +17,8 @@ When it first detects a captive portal, netwatch opens a login window:
   happens when macOS hasn't flagged the network as captive itself, netwatch
   opens the probe URL in your default browser instead, and the portal
   redirects it to its login page.
-- **Windows**: the probe URL in your default browser.
+- **Windows**: `http://www.msftconnecttest.com/redirect` (the page Windows
+  itself opens for captive portals) in your default browser.
 
 You can also open it from the menu with **Open Login Window…**.
 
